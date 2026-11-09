@@ -222,7 +222,6 @@
     save(); updateWakeLock(); render();
   });
   $('resetBtn').addEventListener('click', () => {
-    if (state.totalStart !== null && state.totalEnd === null && !confirm('計測中です。リセットしますか？')) return;
     state.totalStart = null; state.totalEnd = null; state.restEnd = null;
     restSec = defaultRest;
     save(); updateWakeLock(); render();
@@ -230,7 +229,17 @@
 
   // ---- レスト ----
   const clampRest = s => Math.min(600, Math.max(5, s));
-  const setRest = s => { restSec = clampRest(s); render(); };
+  const setRest = s => {
+    const next = clampRest(s), delta = next - restSec;
+    restSec = next;
+    // 計測中のレストにも増減を反映
+    if (delta && state.restEnd !== null && state.restEnd > Date.now()) {
+      state.restEnd += delta * 1000;
+      state.restDur = (state.restDur || next - delta) + delta;
+      save();
+    }
+    render();
+  };
 
   // デフォルト設定ダイアログ
   const dlg = $('settings');
