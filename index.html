@@ -191,6 +191,53 @@
     if (navigator.vibrate) navigator.vibrate([150, 100, 150, 100, 300]);
   };
 
+  // ---- ローカル通知（レスト終了） ----
+  const canNotify = 'Notification' in window && 'serviceWorker' in navigator;
+  const hasTrigger = canNotify && 'showTrigger' in Notification.prototype && typeof TimestampTrigger !== 'undefined';
+  const NOTIF_TAG = 'rest-done';
+  const askNotifyPermission = () => {
+    // ユーザー操作中にだけ許可を求める
+    if (canNotify && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  };
+  const swReg = () => navigator.serviceWorker.getRegistration();
+  const notifOpts = extra => ({
+    body: 'レスト終了。次のセットへ！',
+    tag: NOTIF_TAG,
+    renotify: true,
+    requireInteraction: false,
+    vibrate: [150, 100, 150, 100, 300],
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    ...extra,
+  });
+  const clearRestNotifications = async () => {
+    if (!canNotify) return;
+    try {
+      const reg = await swReg();
+      if (!reg) return;
+      const list = await reg.getNotifications(hasTrigger ? { tag: NOTIF_TAG, includeTriggered: true } : { tag: NOTIF_TAG });
+      list.forEach(n => n.close());
+    } catch {}
+  };
+  // 予約通知（Notification Triggers 対応ブラウザのみ。アプリが止まっていても届く）
+  const scheduleRestNotification = async () => {
+    await clearRestNotifications();
+    if (!hasTrigger || Notification.permission !== 'granted') return;
+    if (state.restEnd === null || state.restEnd <= Date.now()) return;
+    try {
+      const reg = await swReg();
+      if (reg) await reg.showNotification('Training Watch', notifOpts({ showTrigger: new TimestampTrigger(state.restEnd) }));
+    } catch {}
+  };
+  // 即時通知（バックグラウンドでJSが動いている間に終了した場合）
+  const showRestNotification = async () => {
+    if (!canNotify || hasTrigger || Notification.permission !== 'granted') return;
+    try {
+      const reg = await swReg();
+      if (reg) await reg.showNotification('Training Watch', notifOpts());
+    } catch {}
+  };
+
   // ---- 画面スリープ防止 ----
   let wakeLock = null;
   const updateWakeLock = async () => {
@@ -215,6 +262,7 @@
     } else if (state.totalEnd === null) {     // 終了
       state.totalEnd = now;
       state.restEnd = null;
+      scheduleRestNotification();
     } else {                                   // 再開（終了時点から継続）
       state.totalStart += now - state.totalEnd;
       state.totalEnd = null;
@@ -224,6 +272,7 @@
   $('resetBtn').addEventListener('click', () => {
     state.totalStart = null; state.totalEnd = null; state.restEnd = null;
     restSec = defaultRest;
+    scheduleRestNotification();
     save(); updateWakeLock(); render();
   });
 
@@ -237,6 +286,7 @@
       state.restEnd += delta * 1000;
       state.restDur = (state.restDur || next - delta) + delta;
       save();
+      scheduleRestNotification();
     }
     render();
   };
@@ -260,6 +310,7 @@
   $('plusBtn').addEventListener('click', () => setRest(restSec + 15));
   $('restBtn').addEventListener('click', () => {
     unlockAudio();
+    askNotifyPermission();
     const now = Date.now();
     if (state.restEnd !== null && state.restEnd > now) {
       state.restEnd = null;                    // キャンセル
@@ -271,6 +322,7 @@
       if (state.totalStart === null) { state.totalStart = now; state.totalEnd = null; updateWakeLock(); }
     }
     save(); render();
+    scheduleRestNotification();
   });
 
   // ---- 描画 ----
@@ -298,7 +350,13 @@
     if (remainMs !== null && remainMs <= 0 && !restFired) {
       restFired = true;
       // 大きく遅れて復帰した場合（数秒以上前に終了）は鳴らさない
-      if (remainMs > -3000) beep();
+      if (document.visibilityState === 'visible') {
+        if (remainMs > -3000) beep();
+      } else if (remainMs > -60000) {
+        // バックグラウンド中はタイマーが間引かれるので猶予を長めに
+        beep();
+        showRestNotification();
+      }
     }
     const done = remainMs !== null && remainMs <= 0;
     const shownSec = restRunning ? Math.ceil(remainMs / 1000) : done ? 0 : restSec;
@@ -313,7 +371,11 @@
   }
 
   setInterval(render, 100);
-  document.addEventListener('visibilitychange', () => { updateWakeLock(); render(); });
+  document.addEventListener('visibilitychange', () => {
+    updateWakeLock(); render();
+    // アプリに戻ったら表示済みのレスト終了通知は片付ける
+    if (document.visibilityState === 'visible' && state.restEnd !== null && state.restEnd <= Date.now()) clearRestNotifications();
+  });
   updateWakeLock();
   render();
 
