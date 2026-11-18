@@ -1,4 +1,4 @@
-const CACHE = 'training-watch-v3';
+const CACHE = 'training-watch-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -32,5 +32,16 @@ self.addEventListener('fetch', e => {
         return res;
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }))
+  );
+});
+
+// 通知タップでアプリを前面に
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) if ('focus' in c) return c.focus();
+      return self.clients.openWindow('./');
+    })
   );
 });
